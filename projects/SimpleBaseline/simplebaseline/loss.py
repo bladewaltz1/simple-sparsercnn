@@ -51,20 +51,20 @@ class SetCriterion:
         assert 'pred_boxes' in preds
         idx = self._get_pred_permutation_idx(indices)
         pred_boxes = preds['pred_boxes'][idx]
-        target_boxes = torch.cat(
+        tgt_boxes = torch.cat(
             [t['boxes'][i] for t, (_, i) in zip(targets, indices)]
         )
 
         losses = {}
-        loss_giou = 1 - torch.diag(generalized_box_iou(pred_boxes, target_boxes))
+        loss_giou = 1 - torch.diag(generalized_box_iou(pred_boxes, tgt_boxes))
         losses['loss_giou'] = loss_giou.sum() / num_boxes * self.giou_weight
 
         normalizer = torch.cat(
             [v["image_size"].repeat(len(v["boxes"]), 1) for v in targets]
         )
         pred_boxes = pred_boxes / normalizer
-        target_boxes = target_boxes / normalizer
-        loss_l1 = F.l1_loss(pred_boxes, target_boxes, reduction='none')
+        tgt_boxes = tgt_boxes / normalizer
+        loss_l1 = F.l1_loss(pred_boxes, tgt_boxes, reduction='none')
         losses['loss_l1'] = loss_l1.sum() / num_boxes * self.l1_weight
 
         return losses
@@ -120,10 +120,10 @@ class HungarianMatcher:
         bs, num_queries = preds["pred_logits"].shape[:2]
 
         pred_prob = preds["pred_logits"].flatten(0, 1).sigmoid()
-        pred_bbox = preds["pred_boxes"].flatten(0, 1)
+        pred_boxes = preds["pred_boxes"].flatten(0, 1)
 
         tgt_ids = torch.cat([v["labels"] for v in targets])
-        tgt_bbox = torch.cat([v["boxes"] for v in targets])
+        tgt_boxes = torch.cat([v["boxes"] for v in targets])
 
         # Compute the classification cost. Contrary to the loss, 
         # we don't use the NLL, but approximate it in 1 - prob[target class].
@@ -137,17 +137,17 @@ class HungarianMatcher:
         cost_focal = pos_cost[:, tgt_ids] - neg_cost[:, tgt_ids]
 
         # Compute the giou cost betwen boxes
-        cost_giou = -generalized_box_iou(pred_bbox, tgt_bbox)
+        cost_giou = -generalized_box_iou(pred_boxes, tgt_boxes)
 
         # Compute the L1 cost between boxes
         normalizer = torch.cat([v["image_size"] for v in targets])
         normalizer = normalizer.unsqueeze(1).repeat(1, num_queries, 1).flatten(0, 1)
-        pred_bbox = pred_bbox / normalizer
+        pred_boxes = pred_boxes / normalizer
         normalizer = torch.cat(
             [v["image_size"].repeat(len(v["boxes"]), 1) for v in targets]
         )
-        tgt_bbox = tgt_bbox / normalizer
-        cost_l1 = torch.cdist(pred_bbox, tgt_bbox, p=1)
+        tgt_boxes = tgt_boxes / normalizer
+        cost_l1 = torch.cdist(pred_boxes, tgt_boxes, p=1)
 
         # Final cost matrix
         C = self.l1_weight * cost_l1 + self.focal_weight * cost_focal \

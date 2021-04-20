@@ -3,7 +3,7 @@ import copy
 import math
 
 import torch
-from torch import nn, Tensor
+from torch import nn
 import torch.nn.functional as F
 
 from detectron2.layers import Conv2d
@@ -59,20 +59,20 @@ class Decoder(nn.Module):
         )
         return box_pooler
 
-    def forward(self, features, init_bboxes, queries):
+    def forward(self, features, init_boxes, queries):
         output = []
         bs = len(features[0])
-        bboxes = init_bboxes
+        boxes = init_boxes
         queries = queries[None].repeat(bs, 1, 1)
 
         for layer in self.decoder_layers:
-            class_logits, pred_bboxes, queries = layer(
-                features, bboxes, queries, self.box_pooler
+            class_logits, pred_boxes, queries = layer(
+                features, boxes, queries, self.box_pooler
             )
             output.append({
-                'pred_logits': class_logits, 'pred_boxes': pred_bboxes
+                'pred_logits': class_logits, 'pred_boxes': pred_boxes
             })
-            bboxes = pred_bboxes.detach()
+            boxes = pred_boxes.detach()
 
         return output
 
@@ -134,16 +134,16 @@ class DecoderLayer(nn.Module):
         self.class_logits = nn.Linear(d_model, num_classes)
         self.bboxes_delta = nn.Linear(d_model, 4)
 
-    def forward(self, features, bboxes, queries, pooler):
+    def forward(self, features, boxes, queries, pooler):
         """
-        bboxes: (N, nr_boxes, 4)
+        boxes: (N, nr_boxes, 4)
         queries: (N, nr_boxes, d_model)
         """
         N, nr_boxes, d_model = queries.shape
 
         query_boxes = list()
         for b in range(N):
-            query_boxes.append(Boxes(bboxes[b]))
+            query_boxes.append(Boxes(boxes[b]))
         roi_features = pooler(features, query_boxes)
         if self.roi_head is not None:
             roi_features = self.roi_head(roi_features)
@@ -173,12 +173,12 @@ class DecoderLayer(nn.Module):
             reg_feature = reg_layer(reg_feature)
 
         pred_logits = self.class_logits(cls_feature).view(N, nr_boxes, -1)
-        bboxes_deltas = self.bboxes_delta(reg_feature)
-        pred_bboxes = self.apply_deltas(bboxes_deltas, bboxes.view(-1, 4))
-        pred_bboxes = pred_bboxes.view(N, nr_boxes, -1)
+        deltas = self.bboxes_delta(reg_feature)
+        pred_boxes = self.apply_deltas(deltas, boxes.view(-1, 4))
+        pred_boxes = pred_boxes.view(N, nr_boxes, -1)
         queries = queries.view(N, nr_boxes, d_model)
 
-        return pred_logits, pred_bboxes, queries
+        return pred_logits, pred_boxes, queries
 
 
     def apply_deltas(self, deltas, boxes):

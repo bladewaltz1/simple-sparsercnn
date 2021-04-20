@@ -51,9 +51,9 @@ class SimpleBaseline(nn.Module):
             loss_dict = self.criterion(output, targets)
             return loss_dict
         else:
-            box_logits = output[-1]["pred_logits"]
-            box_preds = output[-1]["pred_boxes"]
-            results = self.inference(box_logits, box_preds, images.image_sizes)
+            pred_logits = output[-1]["pred_logits"]
+            pred_boxes = output[-1]["pred_boxes"]
+            results = self.inference(pred_logits, pred_boxes, images.image_sizes)
 
             processed_results = []
             for results_per_image, input_per_image, image_size in zip(
@@ -77,16 +77,16 @@ class SimpleBaseline(nn.Module):
             })
         return new_targets
 
-    def inference(self, box_logits, box_preds, image_sizes):
-        assert len(box_logits) == len(image_sizes)
+    def inference(self, pred_logits, pred_boxes, image_sizes):
+        assert len(pred_logits) == len(image_sizes)
         results = []
 
-        scores = torch.sigmoid(box_logits)
+        scores = torch.sigmoid(pred_logits)
         labels = torch.arange(self.num_classes, device=self.device).\
                     unsqueeze(0).repeat(self.num_queries, 1).flatten(0, 1)
 
-        for i, (score, box_pred, image_size) in enumerate(
-                zip(scores, box_preds, image_sizes)):
+        for i, (score, box, image_size) in enumerate(
+                zip(scores, pred_boxes, image_sizes)):
             result = Instances(image_size)
             score, topk_indices = score.flatten(0, 1).topk(100, sorted=False)
             result.scores = score
@@ -94,9 +94,9 @@ class SimpleBaseline(nn.Module):
             labels_per_image = labels[topk_indices]
             result.pred_classes = labels_per_image
 
-            box_pred = box_pred.view(-1, 1, 4).repeat(1, self.num_classes, 1)
-            box_pred = box_pred.view(-1, 4)[topk_indices]
-            result.pred_boxes = Boxes(box_pred)
+            box = box.view(-1, 1, 4).repeat(1, self.num_classes, 1)
+            box = box.view(-1, 4)[topk_indices]
+            result.pred_boxes = Boxes(box)
             results.append(result)
 
         return results
