@@ -15,9 +15,9 @@ _DEFAULT_SCALE_CLAMP = math.log(100000.0 / 16)
 
 
 class Decoder(nn.Module):
-    def __init__(self, cfg, roi_input_shape):
+    def __init__(self, cfg, input_shape):
         super().__init__()
-        box_pooler = self._init_box_pooler(cfg, roi_input_shape)
+        box_pooler = self._init_box_pooler(cfg, input_shape)
         self.box_pooler = box_pooler
 
         num_classes = cfg.MODEL.SimpleBaseline.NUM_CLASSES
@@ -81,8 +81,8 @@ class DecoderLayer(nn.Module):
     def __init__(self, cfg):
         super().__init__()
         d_model = cfg.MODEL.SimpleBaseline.HIDDEN_DIM
-        dim_feedforward = cfg.MODEL.SimpleBaseline.DIM_FEEDFORWARD
-        nhead = cfg.MODEL.SimpleBaseline.NHEADS
+        d_feedforward = cfg.MODEL.SimpleBaseline.DIM_FEEDFORWARD
+        nhead = cfg.MODEL.SimpleBaseline.NUM_HEADS
         dropout = cfg.MODEL.SimpleBaseline.DROPOUT
         seq_len = cfg.MODEL.ROI_BOX_HEAD.POOLER_RESOLUTION ** 2
 
@@ -90,10 +90,10 @@ class DecoderLayer(nn.Module):
         self.cross_sim = MultiheadSimilarity(d_model, nhead, seq_len)
 
         self.ffn = nn.Sequential(
-            nn.Linear(d_model, dim_feedforward),
+            nn.Linear(d_model, d_feedforward),
             nn.ReLU(inplace=True),
             nn.Dropout(dropout),
-            nn.Linear(dim_feedforward, d_model)
+            nn.Linear(d_feedforward, d_model)
         )
 
         self.norm1 = nn.LayerNorm(d_model)
@@ -223,7 +223,7 @@ class MultiheadSimilarity(nn.Module):
         super().__init__()
         self.nhead = nhead
         self.seq_len = seq_len
-        self.head_dim = d_model // nhead
+        self.d_head = d_model // nhead
 
         self.q_in_proj = nn.Linear(d_model, seq_len * d_model, bias=True)
         self.q_proj = nn.Linear(d_model, d_model, bias=True)
@@ -240,16 +240,16 @@ class MultiheadSimilarity(nn.Module):
         kv = q_ + kv
 
         q = self.q_proj(q)
-        q = q.contiguous().view(nbs, self.head_dim)
+        q = q.contiguous().view(nbs, self.d_head)
         k = self.k_proj(kv)
-        k = k.contiguous().view(self.seq_len, nbs, self.head_dim)
+        k = k.contiguous().view(self.seq_len, nbs, self.d_head)
         q = F.normalize(q, p=2, dim=-1).unsqueeze(-1)
         k = F.normalize(k, p=2, dim=-1).transpose(0, 1)
         similarity = torch.bmm(k, q)
 
         v = self.v_proj(kv)
-        v = v.contiguous().view(self.seq_len, nbs, self.head_dim).transpose(0, 1)
-        v = (v * similarity).view(bs, self.nhead, self.seq_len, self.head_dim)
+        v = v.contiguous().view(self.seq_len, nbs, self.d_head).transpose(0, 1)
+        v = (v * similarity).view(bs, self.nhead, self.seq_len, self.d_head)
         output = self.out_proj(v.flatten(1))
         return output
 

@@ -14,7 +14,9 @@ from detectron2.engine import (
 from detectron2.evaluation import COCOEvaluator, verify_results
 from detectron2.solver.build import maybe_add_gradient_clipping
 
-from simplebaseline import SimpleBaselineDatasetMapper, add_simplebaseline_config
+from simplebaseline import (
+    SimpleBaselineDatasetMapper, add_simplebaseline_config
+)
 
 
 class Trainer(DefaultTrainer):
@@ -48,7 +50,7 @@ class Trainer(DefaultTrainer):
                 {"params": [value], "lr": lr, "weight_decay": weight_decay}
             ]
 
-        def maybe_add_full_model_gradient_clipping(optim):
+        def maybe_add_full_model_grad_clipping(optim):
             # detectron2 doesn't have full model gradient clipping now
             clip_norm_val = cfg.SOLVER.CLIP_GRADIENTS.CLIP_VALUE
             enable = (
@@ -69,11 +71,11 @@ class Trainer(DefaultTrainer):
 
         optimizer_type = cfg.SOLVER.OPTIMIZER
         if optimizer_type == "SGD":
-            optimizer = maybe_add_full_model_gradient_clipping(torch.optim.SGD)(
+            optimizer = maybe_add_full_model_grad_clipping(torch.optim.SGD)(
                 params, cfg.SOLVER.BASE_LR, momentum=cfg.SOLVER.MOMENTUM
             )
         elif optimizer_type == "ADAMW":
-            optimizer = maybe_add_full_model_gradient_clipping(torch.optim.AdamW)(
+            optimizer = maybe_add_full_model_grad_clipping(torch.optim.AdamW)(
                 params, cfg.SOLVER.BASE_LR
             )
         else:

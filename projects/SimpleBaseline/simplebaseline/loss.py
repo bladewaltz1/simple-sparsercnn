@@ -141,8 +141,8 @@ class HungarianMatcher:
 
         # Compute the L1 cost between boxes
         normalizer = torch.cat([v["image_size"] for v in targets])
-        normalizer = normalizer.unsqueeze(1).repeat(1, num_queries, 1).flatten(0, 1)
-        pred_boxes = pred_boxes / normalizer
+        normalizer = normalizer.unsqueeze(1).repeat(1, num_queries, 1)
+        pred_boxes = pred_boxes / normalizer.flatten(0, 1)
         normalizer = torch.cat(
             [v["image_size"].repeat(len(v["boxes"]), 1) for v in targets]
         )
@@ -156,7 +156,8 @@ class HungarianMatcher:
 
         sizes = [len(v["boxes"]) for v in targets]
         indices = [
-            linear_sum_assignment(c[i]) for i, c in enumerate(C.split(sizes, -1))
+            linear_sum_assignment(c[i])
+            for i, c in enumerate(C.split(sizes, -1))
         ]
         return [(torch.as_tensor(i, dtype=torch.int64), 
                  torch.as_tensor(j, dtype=torch.int64)) for i, j in indices]

@@ -9,7 +9,7 @@ def add_simplebaseline_config(cfg):
     cfg.MODEL.SimpleBaseline.USE_FPN = True
 
     # Decoder
-    cfg.MODEL.SimpleBaseline.NHEADS = 8
+    cfg.MODEL.SimpleBaseline.NUM_HEADS = 8
     cfg.MODEL.SimpleBaseline.DROPOUT = 0.0
     cfg.MODEL.SimpleBaseline.DIM_FEEDFORWARD = 2048
     cfg.MODEL.SimpleBaseline.HIDDEN_DIM = 256

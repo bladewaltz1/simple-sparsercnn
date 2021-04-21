@@ -51,7 +51,7 @@ class SimpleBaselineDatasetMapper:
     def __init__(self, cfg, is_train=True):
         self.tfm_gens = build_transform_gen(cfg, is_train)
         logging.getLogger(__name__).info(
-            "Full TransformGens used in training: {}".format(str(self.tfm_gens))
+            "TransformGens used in training: {}".format(str(self.tfm_gens))
         )
 
         self.img_format = cfg.INPUT.FORMAT
@@ -68,7 +68,7 @@ class SimpleBaselineDatasetMapper:
         image = utils.read_image(dataset_dict["file_name"], self.img_format)
         utils.check_image_size(dataset_dict, image)
 
-        image, transforms = T.apply_transform_gens(self.tfm_gens, image)
+        image, tfms = T.apply_transform_gens(self.tfm_gens, image)
         image_shape = image.shape[:2]  # h, w
 
         # Pytorch's dataloader is efficient on torch.Tensor due to shared-memory,
@@ -88,7 +88,7 @@ class SimpleBaselineDatasetMapper:
                 anno.pop("keypoints", None)
 
             annos = [
-                utils.transform_instance_annotations(obj, transforms, image_shape)
+                utils.transform_instance_annotations(obj, tfms, image_shape)
                 for obj in dataset_dict.pop("annotations")
                 if obj.get("iscrowd", 0) == 0
             ]

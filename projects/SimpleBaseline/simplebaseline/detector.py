@@ -25,7 +25,7 @@ class SimpleBaseline(nn.Module):
 
         self.backbone = build_backbone(cfg)
         self.queries = nn.Embedding(self.num_queries, self.hidden_dim)
-        self.decoder = Decoder(cfg, roi_input_shape=self.backbone.output_shape())
+        self.decoder = Decoder(cfg, input_shape=self.backbone.output_shape())
 
         self.criterion = SetCriterion(cfg=cfg)
 
@@ -34,15 +34,15 @@ class SimpleBaseline(nn.Module):
         self.normalizer = lambda x: (x - mu) / sigma
 
     def forward(self, batched_inputs):
-        images, images_xywh = self.preprocess_image(batched_inputs)
+        imgs, img_box = self.preprocess_image(batched_inputs)
 
-        src = self.backbone(images.tensor)
+        src = self.backbone(imgs.tensor)
         features = list()
         for f in self.in_features:
             feature = src[f]
             features.append(feature)
 
-        init_boxes = images_xywh[:, None, :].repeat(1, self.num_queries, 1)
+        init_boxes = img_box[:, None, :].repeat(1, self.num_queries, 1)
         output = self.decoder(features, init_boxes, self.queries.weight)
 
         if self.training:
@@ -53,11 +53,11 @@ class SimpleBaseline(nn.Module):
         else:
             pred_logits = output[-1]["pred_logits"]
             pred_boxes = output[-1]["pred_boxes"]
-            results = self.inference(pred_logits, pred_boxes, images.image_sizes)
+            results = self.inference(pred_logits, pred_boxes, imgs.image_sizes)
 
             processed_results = []
             for results_per_image, input_per_image, image_size in zip(
-                    results, batched_inputs, images.image_sizes):
+                    results, batched_inputs, imgs.image_sizes):
                 height = input_per_image.get("height", image_size[0])
                 width = input_per_image.get("width", image_size[1])
                 r = detector_postprocess(results_per_image, height, width)
@@ -82,8 +82,8 @@ class SimpleBaseline(nn.Module):
         results = []
 
         scores = torch.sigmoid(pred_logits)
-        labels = torch.arange(self.num_classes, device=self.device).\
-                    unsqueeze(0).repeat(self.num_queries, 1).flatten(0, 1)
+        labels = torch.arange(self.num_classes, device=self.device)
+        labels = labels.unsqueeze(0).repeat(self.num_queries, 1).flatten(0, 1)
 
         for i, (score, box, image_size) in enumerate(
                 zip(scores, pred_boxes, image_sizes)):
@@ -104,13 +104,13 @@ class SimpleBaseline(nn.Module):
     def preprocess_image(self, inputs):
         """Normalize, pad and batch the input images.
         """
-        images = [self.normalizer(x["image"].to(self.device)) for x in inputs]
-        images = ImageList.from_tensors(images, self.backbone.size_divisibility)
+        imgs = [self.normalizer(x["image"].to(self.device)) for x in inputs]
+        imgs = ImageList.from_tensors(imgs, self.backbone.size_divisibility)
 
-        images_xywh = list()
+        img_box = list()
         for item in inputs:
             h, w = item["image"].shape[-2:]
-            images_xywh.append(torch.tensor([0, 0, w, h], dtype=torch.float32))
-        images_xywh = torch.stack(images_xywh).to(self.device)
+            img_box.append(torch.tensor([0, 0, w, h], dtype=torch.float32))
+        img_box = torch.stack(img_box).to(self.device)
 
-        return images, images_xywh
+        return imgs, img_box
