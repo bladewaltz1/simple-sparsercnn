@@ -113,6 +113,7 @@ def main(args):
 
     trainer = Trainer(cfg)
     trainer.resume_or_load(resume=args.resume)
+    trainer.scheduler.milestones = cfg.SOLVER.STEPS
     return trainer.train()
 
 

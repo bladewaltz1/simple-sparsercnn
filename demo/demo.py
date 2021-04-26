@@ -10,6 +10,7 @@ import tqdm
 from detectron2.config import get_cfg
 from detectron2.data.detection_utils import read_image
 from detectron2.utils.logger import setup_logger
+
 from predictor import VisualizationDemo
 
 # constants
@@ -19,8 +20,6 @@ WINDOW_NAME = "COCO detections"
 def setup_cfg(args):
     # load config from file and command-line arguments
     cfg = get_cfg()
-    from projects.SparseRCNN.sparsercnn import add_sparsercnn_config
-    add_sparsercnn_config(cfg)
     cfg.merge_from_file(args.config_file)
     cfg.merge_from_list(args.opts)
     # Set score_threshold for builtin models
@@ -85,11 +84,9 @@ if __name__ == "__main__":
             assert args.input, "The input path(s) was not found"
         for path in tqdm.tqdm(args.input, disable=not args.output):
             # use PIL, to be consistent with evaluation
-#             img = read_image(path, format="BGR")
-            # SparseRCNN uses RGB input as default 
-            img = read_image(path, format="RGB")
+            img = read_image(path, format="BGR")
             start_time = time.time()
-            predictions, visualized_output = demo.run_on_image(img, args.confidence_threshold)
+            predictions, visualized_output = demo.run_on_image(img)
             logger.info(
                 "{}: {} in {:.2f}s".format(
                     path,
@@ -117,7 +114,7 @@ if __name__ == "__main__":
         assert args.input is None, "Cannot have both --input and --webcam!"
         assert args.output is None, "output not yet supported with --webcam!"
         cam = cv2.VideoCapture(0)
-        for vis in tqdm.tqdm(demo.run_on_video(cam, args.confidence_threshold)):
+        for vis in tqdm.tqdm(demo.run_on_video(cam)):
             cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
             cv2.imshow(WINDOW_NAME, vis)
             if cv2.waitKey(1) == 27:
@@ -149,7 +146,7 @@ if __name__ == "__main__":
                 isColor=True,
             )
         assert os.path.isfile(args.video_input)
-        for vis_frame in tqdm.tqdm(demo.run_on_video(video, args.confidence_threshold), total=num_frames):
+        for vis_frame in tqdm.tqdm(demo.run_on_video(video), total=num_frames):
             if args.output:
                 output_file.write(vis_frame)
             else:

@@ -20,15 +20,22 @@ class Decoder(nn.Module):
         box_pooler = self._init_box_pooler(cfg, input_shape)
         self.box_pooler = box_pooler
 
-        num_classes = cfg.MODEL.SimpleBaseline.NUM_CLASSES
+        if not cfg.MODEL.SimpleBaseline.USE_FPN:
+            d_model = cfg.MODEL.SimpleBaseline.HIDDEN_DIM
+            self.roi_head = Conv2d(2048, d_model, 1, 1, 0, bias=True)
+        else:
+            self.roi_head = lambda x: x
+
         num_layer = cfg.MODEL.SimpleBaseline.NUM_LAYERS
         decoder_layer = DecoderLayer(cfg)
         self.decoder_layers = _get_clones(decoder_layer, num_layer)
 
-        self.num_classes = num_classes
+        self.num_classes = cfg.MODEL.SimpleBaseline.NUM_CLASSES
         prior_prob = cfg.MODEL.SimpleBaseline.PRIOR_PROB
         self.bias_value = -math.log((1 - prior_prob) / prior_prob)
         self._reset_parameters()
+
+        self.box_jitter_ratio = cfg.MODEL.SimpleBaseline.BOX_JITTER_RATIO
 
     def _reset_parameters(self):
         for p in self.parameters():
@@ -66,13 +73,20 @@ class Decoder(nn.Module):
         queries = queries[None].repeat(bs, 1, 1)
 
         for layer in self.decoder_layers:
-            class_logits, pred_boxes, queries = layer(
-                features, boxes, queries, self.box_pooler
+            pred_logits, pred_boxes, queries = layer(
+                features, boxes, queries, self.box_pooler, self.roi_head
             )
-            output.append({
-                'pred_logits': class_logits, 'pred_boxes': pred_boxes
-            })
+            output.append(
+                {'pred_logits': pred_logits, 'pred_boxes': pred_boxes}
+            )
+
             boxes = pred_boxes.detach()
+            if self.training:
+                dw = boxes[:, :, [2]] - boxes[:, :, [0]]
+                dh = boxes[:, :, [3]] - boxes[:, :, [1]]
+                offset = torch.rand_like(boxes) - 0.5
+                delta = torch.cat([dw, dh, dw, dh], dim=-1)
+                boxes = boxes + delta * offset * self.box_jitter_ratio
 
         return output
 
@@ -81,19 +95,19 @@ class DecoderLayer(nn.Module):
     def __init__(self, cfg):
         super().__init__()
         d_model = cfg.MODEL.SimpleBaseline.HIDDEN_DIM
-        d_feedforward = cfg.MODEL.SimpleBaseline.DIM_FEEDFORWARD
-        nhead = cfg.MODEL.SimpleBaseline.NUM_HEADS
+        d_ffn = cfg.MODEL.SimpleBaseline.FEEDFORWARD_DIM
+        num_head = cfg.MODEL.SimpleBaseline.NUM_HEADS
         dropout = cfg.MODEL.SimpleBaseline.DROPOUT
         seq_len = cfg.MODEL.ROI_BOX_HEAD.POOLER_RESOLUTION ** 2
 
-        self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
-        self.cross_sim = MultiheadSimilarity(d_model, nhead, seq_len)
+        self.self_attn = nn.MultiheadAttention(d_model, num_head, dropout)
+        self.cross_sim = MultiheadSimilarity(d_model, num_head, seq_len)
 
         self.ffn = nn.Sequential(
-            nn.Linear(d_model, d_feedforward),
+            nn.Linear(d_model, d_ffn),
             nn.ReLU(inplace=True),
             nn.Dropout(dropout),
-            nn.Linear(d_feedforward, d_model)
+            nn.Linear(d_ffn, d_model)
         )
 
         self.norm1 = nn.LayerNorm(d_model)
@@ -125,16 +139,11 @@ class DecoderLayer(nn.Module):
             )
         self.reg_module = nn.ModuleList(reg_module)
 
-        if not cfg.MODEL.SimpleBaseline.USE_FPN:
-            self.roi_head = Conv2d(2048, d_model, 1, 1, 0, bias=True)
-        else:
-            self.roi_head = None
-
         num_classes = cfg.MODEL.SimpleBaseline.NUM_CLASSES
         self.class_logits = nn.Linear(d_model, num_classes)
         self.bboxes_delta = nn.Linear(d_model, 4)
 
-    def forward(self, features, boxes, queries, pooler):
+    def forward(self, features, boxes, queries, pooler, roi_head):
         """
         boxes: (N, nr_boxes, 4)
         queries: (N, nr_boxes, d_model)
@@ -145,8 +154,7 @@ class DecoderLayer(nn.Module):
         for b in range(N):
             query_boxes.append(Boxes(boxes[b]))
         roi_features = pooler(features, query_boxes)
-        if self.roi_head is not None:
-            roi_features = self.roi_head(roi_features)
+        roi_features = roi_head(roi_features)
         roi_features = roi_features.view(N * nr_boxes, d_model, -1)
         roi_features = roi_features.permute(2, 0, 1)
 
@@ -219,11 +227,11 @@ class DecoderLayer(nn.Module):
 
 
 class MultiheadSimilarity(nn.Module):
-    def __init__(self, d_model, nhead, seq_len):
+    def __init__(self, d_model, num_head, seq_len):
         super().__init__()
-        self.nhead = nhead
+        self.num_head = num_head
         self.seq_len = seq_len
-        self.d_head = d_model // nhead
+        self.d_head = d_model // num_head
 
         self.q_in_proj = nn.Linear(d_model, seq_len * d_model, bias=True)
         self.q_proj = nn.Linear(d_model, d_model, bias=True)
@@ -233,23 +241,21 @@ class MultiheadSimilarity(nn.Module):
 
     def forward(self, q, kv):
         bs, d_model = q.shape
-        nbs = bs * self.nhead
+        nbs = bs * self.num_head
 
         q_ = self.q_in_proj(q)
         q_ = q_.contiguous().view(bs, self.seq_len, d_model).transpose(0, 1)
         kv = q_ + kv
 
         q = self.q_proj(q)
-        q = q.contiguous().view(nbs, self.d_head)
+        q = q.contiguous().view(nbs, self.d_head).unsqueeze(-1)
         k = self.k_proj(kv)
-        k = k.contiguous().view(self.seq_len, nbs, self.d_head)
-        q = F.normalize(q, p=2, dim=-1).unsqueeze(-1)
-        k = F.normalize(k, p=2, dim=-1).transpose(0, 1)
-        similarity = torch.bmm(k, q)
+        k = k.contiguous().view(self.seq_len, nbs, self.d_head).transpose(0, 1)
+        similarity = torch.bmm(k, q) * float(self.d_head) ** -0.5
 
         v = self.v_proj(kv)
         v = v.contiguous().view(self.seq_len, nbs, self.d_head).transpose(0, 1)
-        v = (v * similarity).view(bs, self.nhead, self.seq_len, self.d_head)
+        v = (v * similarity).view(bs, self.num_head, self.seq_len, self.d_head)
         output = self.out_proj(v.flatten(1))
         return output
 

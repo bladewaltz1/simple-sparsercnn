@@ -7,11 +7,12 @@ def add_simplebaseline_config(cfg):
     cfg.MODEL.SimpleBaseline.NUM_CLASSES = 80
     cfg.MODEL.SimpleBaseline.NUM_QUERIES = 300
     cfg.MODEL.SimpleBaseline.USE_FPN = True
+    cfg.MODEL.SimpleBaseline.BOX_JITTER_RATIO = 0.1
 
     # Decoder
     cfg.MODEL.SimpleBaseline.NUM_HEADS = 8
     cfg.MODEL.SimpleBaseline.DROPOUT = 0.0
-    cfg.MODEL.SimpleBaseline.DIM_FEEDFORWARD = 2048
+    cfg.MODEL.SimpleBaseline.FEEDFORWARD_DIM = 2048
     cfg.MODEL.SimpleBaseline.HIDDEN_DIM = 256
     cfg.MODEL.SimpleBaseline.NUM_CLS = 1
     cfg.MODEL.SimpleBaseline.NUM_REG = 3
