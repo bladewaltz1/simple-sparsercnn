@@ -4,7 +4,6 @@ import math
 
 import torch
 from torch import nn
-import torch.nn.functional as F
 
 from detectron2.layers import Conv2d
 from detectron2.modeling.poolers import ROIPooler
@@ -97,11 +96,12 @@ class DecoderLayer(nn.Module):
         d_model = cfg.MODEL.SimpleBaseline.HIDDEN_DIM
         d_ffn = cfg.MODEL.SimpleBaseline.FEEDFORWARD_DIM
         num_head = cfg.MODEL.SimpleBaseline.NUM_HEADS
+        d_dynamic = cfg.MODEL.SimpleBaseline.DIM_DYNAMIC
         dropout = cfg.MODEL.SimpleBaseline.DROPOUT
         seq_len = cfg.MODEL.ROI_BOX_HEAD.POOLER_RESOLUTION ** 2
 
         self.self_attn = nn.MultiheadAttention(d_model, num_head, dropout)
-        self.cross_sim = MultiheadSimilarity(d_model, num_head, seq_len)
+        self.cross_sim = MultiheadSimilarity(d_model, d_dynamic, seq_len)
 
         self.ffn = nn.Sequential(
             nn.Linear(d_model, d_ffn),
@@ -227,38 +227,47 @@ class DecoderLayer(nn.Module):
 
 
 class MultiheadSimilarity(nn.Module):
-    def __init__(self, d_model, num_head, seq_len):
+    def __init__(self, d_model, d_dynamic, seq_len):
         super().__init__()
-        self.num_head = num_head
-        self.seq_len = seq_len
-        self.d_head = d_model // num_head
+        self.dynamic_layer = nn.Linear(d_model, 2 * d_model * d_dynamic)
+        self.out_layer = nn.Linear(d_model * seq_len, d_model)
+        self.activation = nn.ReLU(inplace=True)
+        self.norm1 = nn.LayerNorm(d_dynamic)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.norm3 = nn.LayerNorm(d_model)
 
-        self.q_in_proj = nn.Linear(d_model, seq_len * d_model, bias=True)
-        self.q_proj = nn.Linear(d_model, d_model, bias=True)
-        self.k_proj = nn.Linear(d_model, d_model, bias=True)
-        self.v_proj = nn.Linear(d_model, d_model, bias=True)
-        self.out_proj = nn.Linear(seq_len * d_model, d_model, bias=True)
+        self.num_params = d_model * d_dynamic
+        self.d_dynamic = d_dynamic
+        self.d_model = d_model
 
-    def forward(self, q, kv):
-        bs, d_model = q.shape
-        nbs = bs * self.num_head
+    def forward(self, query, roi_features):
+        """
+        query: (N * nr_boxes, d_model)
+        roi_features: (49, N * nr_boxes, d_model)
+        """
+        features = roi_features.permute(1, 0, 2)
+        parameters = self.dynamic_layer(query)
 
-        q_ = self.q_in_proj(q)
-        q_ = q_.contiguous().view(bs, self.seq_len, d_model).transpose(0, 1)
-        kv = q_ + kv
+        param1 = parameters[:, :self.num_params]
+        param1 = param1.view(-1, self.d_model, self.d_dynamic)
+        param2 = parameters[:, self.num_params:]
+        param2 = param2.view(-1, self.d_dynamic, self.d_model)
 
-        q = self.q_proj(q)
-        q = q.contiguous().view(nbs, self.d_head).unsqueeze(-1)
-        k = self.k_proj(kv)
-        k = k.contiguous().view(self.seq_len, nbs, self.d_head).transpose(0, 1)
-        similarity = torch.bmm(k, q) * float(self.d_head) ** -0.5
+        features = torch.bmm(features, param1)
+        features = self.norm1(features)
+        features = self.activation(features)
 
-        v = self.v_proj(kv)
-        v = v.contiguous().view(self.seq_len, nbs, self.d_head).transpose(0, 1)
-        v = (v * similarity).view(bs, self.num_head, self.seq_len, self.d_head)
-        output = self.out_proj(v.flatten(1))
-        return output
+        features = torch.bmm(features, param2)
+        features = self.norm2(features)
+        features = self.activation(features)
+
+        features = features.flatten(1)
+        features = self.out_layer(features)
+        features = self.norm3(features)
+        features = self.activation(features)
+
+        return features
 
 
 def _get_clones(module, N):
-    return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
+    return nn.ModuleList([copy.deepcopy(module) for _ in range(N)])

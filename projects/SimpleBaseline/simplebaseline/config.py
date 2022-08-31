@@ -17,6 +17,7 @@ def add_simplebaseline_config(cfg):
     cfg.MODEL.SimpleBaseline.NUM_CLS = 1
     cfg.MODEL.SimpleBaseline.NUM_REG = 3
     cfg.MODEL.SimpleBaseline.NUM_LAYERS = 6
+    cfg.MODEL.SimpleBaseline.DIM_DYNAMIC = 64
 
     # Loss.
     cfg.MODEL.SimpleBaseline.FOCAL_WEIGHT = 2.0
