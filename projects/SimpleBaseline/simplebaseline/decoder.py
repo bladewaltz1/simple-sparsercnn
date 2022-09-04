@@ -71,7 +71,7 @@ class Decoder(nn.Module):
         boxes = init_boxes
         queries = queries[None].repeat(bs, 1, 1)
 
-        for layer in self.decoder_layers:
+        for i, layer in enumerate(self.decoder_layers):
             pred_logits, pred_boxes, queries = layer(
                 features, boxes, queries, self.box_pooler, self.roi_head
             )
@@ -80,7 +80,7 @@ class Decoder(nn.Module):
             )
 
             boxes = pred_boxes.detach()
-            if self.training:
+            if self.training and i >= 3:
                 dw = boxes[:, :, [2]] - boxes[:, :, [0]]
                 dh = boxes[:, :, [3]] - boxes[:, :, [1]]
                 offset = torch.rand_like(boxes) - 0.5
@@ -96,16 +96,14 @@ class DecoderLayer(nn.Module):
         d_model = cfg.MODEL.SimpleBaseline.HIDDEN_DIM
         d_ffn = cfg.MODEL.SimpleBaseline.FEEDFORWARD_DIM
         num_head = cfg.MODEL.SimpleBaseline.NUM_HEADS
-        d_dynamic = cfg.MODEL.SimpleBaseline.DIM_DYNAMIC
         dropout = cfg.MODEL.SimpleBaseline.DROPOUT
-        seq_len = cfg.MODEL.ROI_BOX_HEAD.POOLER_RESOLUTION ** 2
 
         self.self_attn = nn.MultiheadAttention(d_model, num_head, dropout)
-        self.cross_sim = MultiheadSimilarity(d_model, d_dynamic, seq_len)
+        self.cross_attn = nn.MultiheadAttention(d_model, num_head, dropout)
 
         self.ffn = nn.Sequential(
             nn.Linear(d_model, d_ffn),
-            nn.ReLU(inplace=True),
+            nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(d_ffn, d_model)
         )
@@ -122,7 +120,7 @@ class DecoderLayer(nn.Module):
                 nn.Sequential(
                     nn.Linear(d_model, d_model, False),
                     nn.LayerNorm(d_model),
-                    nn.ReLU(inplace=True)
+                    nn.GELU()
                 )
             )
         self.cls_module = nn.ModuleList(cls_module)
@@ -134,7 +132,7 @@ class DecoderLayer(nn.Module):
                 nn.Sequential(
                     nn.Linear(d_model, d_model, False),
                     nn.LayerNorm(d_model),
-                    nn.ReLU(inplace=True)
+                    nn.GELU()
                 )
             )
         self.reg_module = nn.ModuleList(reg_module)
@@ -164,8 +162,8 @@ class DecoderLayer(nn.Module):
         queries = self.norm1(queries)
 
         queries = queries.permute(1, 0, 2)
-        queries = queries.reshape(N * nr_boxes, d_model)
-        queries2 = self.cross_sim(queries, roi_features)
+        queries = queries.reshape(1, N * nr_boxes, d_model)
+        queries2 = self.cross_attn(queries, roi_features, roi_features)[0]
         queries = queries + self.dropout(queries2)
         queries = self.norm2(queries)
 
@@ -181,7 +179,7 @@ class DecoderLayer(nn.Module):
             reg_feature = reg_layer(reg_feature)
 
         pred_logits = self.class_logits(cls_feature).view(N, nr_boxes, -1)
-        deltas = self.bboxes_delta(reg_feature)
+        deltas = self.bboxes_delta(reg_feature.view(N * nr_boxes, -1))
         pred_boxes = self.apply_deltas(deltas, boxes.view(-1, 4))
         pred_boxes = pred_boxes.view(N, nr_boxes, -1)
         queries = queries.view(N, nr_boxes, d_model)
@@ -224,49 +222,6 @@ class DecoderLayer(nn.Module):
         pred_boxes[:, 3::4] = pred_ctr_y + 0.5 * pred_h  # y2
 
         return pred_boxes
-
-
-class MultiheadSimilarity(nn.Module):
-    def __init__(self, d_model, d_dynamic, seq_len):
-        super().__init__()
-        self.dynamic_layer = nn.Linear(d_model, 2 * d_model * d_dynamic)
-        self.out_layer = nn.Linear(d_model * seq_len, d_model)
-        self.activation = nn.ReLU(inplace=True)
-        self.norm1 = nn.LayerNorm(d_dynamic)
-        self.norm2 = nn.LayerNorm(d_model)
-        self.norm3 = nn.LayerNorm(d_model)
-
-        self.num_params = d_model * d_dynamic
-        self.d_dynamic = d_dynamic
-        self.d_model = d_model
-
-    def forward(self, query, roi_features):
-        """
-        query: (N * nr_boxes, d_model)
-        roi_features: (49, N * nr_boxes, d_model)
-        """
-        features = roi_features.permute(1, 0, 2)
-        parameters = self.dynamic_layer(query)
-
-        param1 = parameters[:, :self.num_params]
-        param1 = param1.view(-1, self.d_model, self.d_dynamic)
-        param2 = parameters[:, self.num_params:]
-        param2 = param2.view(-1, self.d_dynamic, self.d_model)
-
-        features = torch.bmm(features, param1)
-        features = self.norm1(features)
-        features = self.activation(features)
-
-        features = torch.bmm(features, param2)
-        features = self.norm2(features)
-        features = self.activation(features)
-
-        features = features.flatten(1)
-        features = self.out_layer(features)
-        features = self.norm3(features)
-        features = self.activation(features)
-
-        return features
 
 
 def _get_clones(module, N):
